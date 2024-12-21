@@ -29,6 +29,8 @@ type ListenConfig struct {
 	// UpstreamPacketListener adds an abstraction for net.ListenPacket.
 	UpstreamPacketListener UpstreamPacketListener
 
+	ProtocolVersions []byte
+
 	// DisableCookies specifies if cookies should be generated and verified for
 	// new incoming connections. This is a security measure against IP spoofing,
 	// but some server providers (OVH in particular) have existing protection
@@ -52,6 +54,8 @@ type Listener struct {
 
 	once   sync.Once
 	closed chan struct{}
+
+	protocols []byte
 
 	conn net.PacketConn
 	// incoming is a channel of incoming connections. Connections that end up in
@@ -100,12 +104,16 @@ func (conf ListenConfig) Listen(address string) (*Listener, error) {
 		return nil, &net.OpError{Op: "listen", Net: "raknet", Source: nil, Addr: nil, Err: err}
 	}
 	listener := &Listener{
-		conf:     conf,
-		conn:     conn,
-		incoming: make(chan *Conn),
-		closed:   make(chan struct{}),
-		id:       atomic.AddInt64(&listenerID, 1),
-		sec:      newSecurity(conf),
+		conf:      conf,
+		conn:      conn,
+		protocols: []byte{protocolVersion},
+		incoming:  make(chan *Conn),
+		closed:    make(chan struct{}),
+		id:        atomic.AddInt64(&listenerID, 1),
+		sec:       newSecurity(conf),
+	}
+	if len(conf.ProtocolVersions) > 0 {
+		listener.protocols = append(listener.protocols, conf.ProtocolVersions...)
 	}
 	listener.handler = &listenerConnectionHandler{l: listener, cookieSalt: rand.Uint32()}
 	listener.pongData.Store(new([]byte))
@@ -184,7 +192,7 @@ func (listener *Listener) listen() {
 				close(listener.incoming)
 				return
 			}
-			listener.conf.ErrorLog.Error("read from: "+err.Error())
+			listener.conf.ErrorLog.Error("read from: " + err.Error())
 			continue
 		} else if n == 0 || listener.sec.blocked(addr) {
 			continue

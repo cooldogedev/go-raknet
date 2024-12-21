@@ -59,6 +59,8 @@ type Conn struct {
 	// losing bytes.
 	mtu uint16
 
+	protocol byte
+
 	// splits is a map of slices indexed by split IDs. The length of each of the
 	// slices is equal to the split count, and packets are positioned in that
 	// slice indexed by the split index.
@@ -91,12 +93,13 @@ type Conn struct {
 
 // newConn constructs a new connection specifically dedicated to the address
 // passed.
-func newConn(conn net.PacketConn, raddr net.Addr, mtu uint16, h connectionHandler) *Conn {
+func newConn(conn net.PacketConn, raddr net.Addr, mtu uint16, protocol byte, h connectionHandler) *Conn {
 	mtu = min(max(mtu, minMTUSize), maxMTUSize)
 	c := &Conn{
 		raddr:          raddr,
 		conn:           conn,
 		mtu:            mtu,
+		protocol:       protocol,
 		handler:        h,
 		pk:             new(packet),
 		closed:         make(chan struct{}),
@@ -114,6 +117,10 @@ func newConn(conn net.PacketConn, raddr net.Addr, mtu uint16, h connectionHandle
 	c.lastActivity.Store(&t)
 	go c.startTicking()
 	return c
+}
+
+func (conn *Conn) ProtocolVersion() byte {
+	return conn.protocol
 }
 
 // effectiveMTU returns the mtu size without the space allocated for IP and

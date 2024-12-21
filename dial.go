@@ -88,6 +88,8 @@ func DialContext(ctx context.Context, address string) (*Conn, error) {
 // Dialer allows dialing a RakNet connection with specific configuration, such
 // as the protocol version of the connection and the logger used.
 type Dialer struct {
+	ProtocolVersion byte
+
 	// ErrorLog is a logger that errors from packet decoding are logged to. By
 	// default, ErrorLog is set to a new slog.Logger with a slog.Handler that
 	// is always disabled. Error messages are thus not logged by default.
@@ -220,7 +222,10 @@ func (dialer Dialer) DialContext(ctx context.Context, address string) (*Conn, er
 	}
 	dialer.ErrorLog = dialer.ErrorLog.With("src", "dialer", "raddr", conn.RemoteAddr().String())
 
-	cs := &connState{conn: conn, raddr: conn.RemoteAddr(), id: atomic.AddInt64(&dialerID, 1), ticker: time.NewTicker(time.Second / 2)}
+	cs := &connState{conn: conn, raddr: conn.RemoteAddr(), protocol: protocolVersion, id: atomic.AddInt64(&dialerID, 1), ticker: time.NewTicker(time.Second / 2)}
+	if dialer.ProtocolVersion != 0 {
+		cs.protocol = dialer.ProtocolVersion
+	}
 	defer cs.ticker.Stop()
 	if err = cs.discoverMTU(ctx); err != nil {
 		return nil, dialer.error("dial", err)
@@ -234,7 +239,7 @@ func (dialer Dialer) DialContext(ctx context.Context, address string) (*Conn, er
 // dial finishes the RakNet connection sequence and returns a Conn if
 // successful.
 func (dialer Dialer) connect(ctx context.Context, state *connState) (*Conn, error) {
-	conn := newConn(internal.ConnToPacketConn(state.conn), state.raddr, state.mtu, dialerConnectionHandler{l: dialer.ErrorLog})
+	conn := newConn(internal.ConnToPacketConn(state.conn), state.raddr, state.mtu, dialer.ProtocolVersion, dialerConnectionHandler{l: dialer.ErrorLog})
 	if err := conn.send((&message.ConnectionRequest{ClientGUID: state.id, RequestTime: timestamp()})); err != nil {
 		return nil, dialer.error("dial", fmt.Errorf("send connection request: %w", err))
 	}
@@ -285,6 +290,8 @@ type connState struct {
 	// 1 packet. It is the MTU size sent by the server.
 	mtu uint16
 
+	protocol byte
+
 	serverSecurity bool
 	cookie         uint32
 
@@ -333,7 +340,7 @@ func (state *connState) discoverMTU(ctx context.Context) error {
 			if err := response.UnmarshalBinary(b[1:n]); err != nil {
 				return fmt.Errorf("read incompatible protocol version: %w", err)
 			}
-			return fmt.Errorf("mismatched protocol: client protocol = %v, server protocol = %v", protocolVersion, response.ServerProtocol)
+			return fmt.Errorf("mismatched protocol: client protocol = %v, server protocol = %v", state.protocol, response.ServerProtocol)
 		}
 	}
 }
@@ -401,7 +408,7 @@ func (state *connState) request2(ctx context.Context, mtu uint16) {
 // openConnectionRequest1 sends an open connection request 1 packet to the
 // server. If not successful, an error is returned.
 func (state *connState) openConnectionRequest1(mtu uint16) {
-	data, _ := (&message.OpenConnectionRequest1{ClientProtocol: protocolVersion, MTU: mtu}).MarshalBinary()
+	data, _ := (&message.OpenConnectionRequest1{ClientProtocol: state.protocol, MTU: mtu}).MarshalBinary()
 	_, _ = state.conn.Write(data)
 }
 
